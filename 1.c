@@ -1,12 +1,17 @@
+#define _XOPEN_SOURCE 700
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <fcntl.h>
-#include <stdbool.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <pwd.h>
+#include <grp.h>
+#include <string.h>
+#include <time.h>
 
-#define BUFF_SIZE (4096)
+#define MAX 1024
 
 #define checkError(err, usrMsg)\
     do{\
@@ -16,91 +21,165 @@
             exit(EXIT_FAILURE);\
         }\
     }while(0)
-
-bool myFopen(const char *pathname, const char *mode, int* fd){
-    int flags = 0;
-    int creation_mode = 0755;
     
-    switch(mode[0]){
-        case 'r':
-            flags |= (mode[1] == '+') ? O_RDWR : O_RDONLY;
-            break;
-        case 'w':
-            flags |= (mode[1] == '+') ? O_RDWR : O_WRONLY;
-            flags |= O_CREAT;
-            flags |= O_TRUNC;
-            break;
-        case 'a':
-            flags |= (mode[1] == '+') ? O_RDWR : O_WRONLY;
-            flags |= O_CREAT;
-            flags |= O_APPEND;
-            break;
+void printUserInfo(const char *username, FILE *outStream){
+    struct passwd *userInfo = NULL;
+    
+    userInfo = getpwnam(username);
+    checkError(userInfo != NULL, "getpwnam");
+    
+    fprintf(outStream, "Username: %s\n", userInfo->pw_name);
+    fprintf(outStream, "Password: %s\n", userInfo->pw_passwd);
+    fprintf(outStream, "UserID: %d\n", userInfo->pw_uid);
+    fprintf(outStream, "GroupID: %d\n", userInfo->pw_gid);
+    fprintf(outStream, "Info: %s\n", userInfo->pw_gecos);
+    fprintf(outStream, "Directory: %s\n", userInfo->pw_dir);
+    fprintf(outStream, "Shell: %s\n", userInfo->pw_shell);
+}
+
+void printAllUsers(FILE *outStream){
+    struct passwd *userInfo = NULL;
+    
+    setpwent();
+    
+    while((userInfo = getpwent()) != NULL){
+        fprintf(outStream, "Username: %s\n", userInfo->pw_name);
+        fprintf(outStream, "Password: %s\n", userInfo->pw_passwd);
+        fprintf(outStream, "UserID: %d\n", userInfo->pw_uid);
+        fprintf(outStream, "GroupID: %d\n", userInfo->pw_gid);
+        fprintf(outStream, "Info: %s\n", userInfo->pw_gecos);
+        fprintf(outStream, "Directory: %s\n", userInfo->pw_dir);
+        fprintf(outStream, "Shell: %s\n", userInfo->pw_shell);
+        
     }
     
-    *fd = open(pathname, flags, creation_mode);
-    if(*fd < 0)
-        return false;
+    endpwent();
+    return;
+}
+
+void printAllGroups(FILE *outStream){
+    struct group *groupInfo = NULL;
+    
+    setgrent();
+    
+    while((groupInfo = getgrent()) != NULL){
+        fprintf(outStream, "Group name: %s\n", groupInfo->gr_name);
+        fprintf(outStream, "Password: %s\n", groupInfo->gr_passwd);
+        fprintf(outStream, "GroupID: %d\n", groupInfo->gr_gid);
+        
+        for(int i = 0; groupInfo->gr_mem[i] != NULL; i++)
+            fprintf(outStream, "%s \t", groupInfo->gr_mem[i]);
+        fprintf(outStream, "\n");
+        
+    }
+    
+    endgrent();
+    return;
+}
+
+char *getUsername(uid_t uid){
+    struct passwd *userInfo = getpwuid(uid);
+    checkError(userInfo != NULL, "getpwuid");
+    
+    char *tmpName = malloc(MAX * sizeof(char));
+    checkError(tmpName != NULL, "malloc");
+    
+    strcpy(tmpName, userInfo->pw_name);
+    
+    return tmpName;
+}
+
+void getFileInfo(const char *filename, char **result){
+    *result = malloc(MAX * sizeof(char));
+    checkError(*result != NULL, "malloc");
+    
+    char *resultStr = *result;
+    
+    struct stat fileinfo;
+    checkError(stat(filename, &fileinfo)!= -1, "stat");
+    
+    //FILE TYPE
+    if(S_ISREG(fileinfo.st_mode))
+        resultStr[0] = '-';
+    else if(S_ISDIR(fileinfo.st_mode))
+        resultStr[0] = 'd';
+    
+    //PERMISSIONS
+    if(fileinfo.st_mode & S_IRUSR)
+        resultStr[1] = 'r';
     else
-        return true;
-}
+        resultStr[1] = '-';
     
-bool myCat(int fd){
-    int readBytes = 0;
-    char *memBuf = malloc(BUFF_SIZE * sizeof(char));
-    if(memBuf == NULL)
-        return false;
+    if(fileinfo.st_mode & S_IWUSR)
+        resultStr[2] = 'w';
+    else
+        resultStr[2] = '-';
     
-    while ((readBytes = read(fd, memBuf, BUFF_SIZE)) > 0){
-        if(write(STDOUT_FILENO, memBuf, readBytes) == -1)
-            free(memBuf);
-            return false;
-    }
-    free(memBuf);
+    if(fileinfo.st_mode & S_IXUSR)
+        resultStr[3] = 'x';
+    else
+        resultStr[3] = '-';
     
-    if(readBytes < 0)
-        return false;
-    else 
-        return true;
-}
+    if(fileinfo.st_mode & S_IRGRP)
+        resultStr[4] = 'r';
+    else
+        resultStr[4] = '-';
+    
+    if(fileinfo.st_mode & S_IWGRP)
+        resultStr[5] = 'w';
+    else
+        resultStr[5] = '-';
+    
+    if(fileinfo.st_mode & S_IXGRP)
+        resultStr[6] = 'x';
+    else
+        resultStr[6] = '-';
+    
+    if(fileinfo.st_mode & S_IROTH)
+        resultStr[7] = 'r';
+    else
+        resultStr[7] = '-';
+    
+    if(fileinfo.st_mode & S_IWOTH)
+        resultStr[8] = 'w';
+    else
+        resultStr[8] = '-';
+    
+    if(fileinfo.st_mode & S_IXOTH)
+        resultStr[9] = 'x';
+    else
+        resultStr[9] = '-';
 
-bool myCp(const char *dest, const char *source){
-    int readBytes = 0;
-    char *memBuf = malloc(BUFF_SIZE * sizeof(char));
-    if(memBuf == NULL)
-        return false;
+    //LINKS
+    int offset = 10;
+    offset += sprintf(resultStr + offset, " %ld ", fileinfo.st_nlink);
     
-    int fdSrc, fdDest;
-    if(myFopen(source, "r", &fdSrc) != true || myFopen(dest, "w", &fdDest) != true){
-        close(fdSrc);
-        free(memBuf);
-        return false;
-    }
+    //USERNAME
+    char *username = getUsername(fileinfo.st_uid);
+    offset += sprintf(resultStr + offset, "%s ", username);
     
-    while ((readBytes = read(fdSrc, memBuf, BUFF_SIZE)) > 0){
-        if(write(fdDest, memBuf, readBytes) == -1)
-            free(memBuf);
-            return false;
-    }
-    free(memBuf);
-    close(fdSrc);
-    close(fdDest);
+    //USERNAME
+    offset += sprintf(resultStr + offset, "%s ", username);
     
-    if(readBytes < 0)
-        return false;
-    else 
-        return true;
+    //SIZE
+    offset += sprintf(resultStr + offset, "%ld ", fileinfo.st_size);
+    
+    //TIME
+    time_t mtimeSec = fileinfo.st_mtime;
+    char *timeStr = ctime(&mtimeSec);
+    offset += sprintf(resultStr + offset, "%s ", timeStr);
     
 }
-
+    
 int main(int argc, char **argv){
-    int fd;
+    
     checkError(argc == 2, "argc");
+    char *result = NULL;
     
-    checkError(myFopen(argv[1], "r", &fd), "myfopen");
+    getFileInfo(argv[1], &result);
+    printf("%s\n", result);
     
-    checkError(myCat(fd), "mycat");
-    
-    close(fd);
+    free(result);
     
     return 0;
 }
